@@ -21,9 +21,5 @@ Reproduz e expande a análise exploratória do notebook original:
 - **Filtros na barra lateral**: por tipo de estrela, cor e faixa de temperatura.
 - **Distribuição dos tipos e cores**: gráfico de barras e pizza.
 - **Distribuição da temperatura**: boxplot e histograma.
-- **Diagrama H-R**: temperatura x luminosidade (escala log, eixo invertido como
-  na convenção astronômica), com tamanho dos pontos proporcional ao raio.
-- **Matriz de correlação**: entre temperatura, luminosidade, raio e magnitude
-  absoluta.
 
 Todos os gráficos são interativos (Plotly) e respondem aos filtros escolhidos.
