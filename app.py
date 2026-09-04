@@ -2,6 +2,8 @@ import pandas as pd
 import numpy as np
 import plotly.express as px
 import streamlit as st
+import gspread
+from google.oauth2.service_account import Credentials
 
 # ----------------------------------------------------------------------------
 # Configuração da página
@@ -35,6 +37,7 @@ NOMES_CORES_PT = {
     "Yellowish": "Amarelado",
     "": "Não informado",
 }
+CORES_PT_PARA_INGLES = {v: k for k, v in NOMES_CORES_PT.items()}
 
 MAPA_CORES = {
     "Vermelho": "#c0392b",
@@ -48,44 +51,62 @@ MAPA_CORES = {
     "Não informado": "#7f8c8d",
 }
 
+COLUNAS_NUMERICAS = [
+    "Temperature (K)",
+    "Luminosity(L/Lo)",
+    "Radius(R/Ro)",
+    "Absolute magnitude(Mv)",
+    "Star type",
+]
+
+ESCOPOS = [
+    "https://www.googleapis.com/auth/spreadsheets",
+    "https://www.googleapis.com/auth/drive",
+]
+
 
 # ----------------------------------------------------------------------------
-# Carregamento e limpeza dos dados (mesmos passos do notebook)
+# Conexão com o Google Sheets
 # ----------------------------------------------------------------------------
-@st.cache_data
-def carregar_dados(caminho: str) -> pd.DataFrame:
-    df = pd.read_csv(caminho)
+@st.cache_resource
+def conectar_planilha():
+    credenciais = Credentials.from_service_account_info(
+        st.secrets["gcp_service_account"], scopes=ESCOPOS
+    )
+    cliente = gspread.authorize(credenciais)
+    return cliente.open_by_key(st.secrets["sheets"]["spreadsheet_id"]).sheet1
 
-    # remove linhas totalmente vazias / com valores ausentes, como no notebook
+
+@st.cache_data(ttl=60)
+def carregar_dados_brutos_da_planilha() -> pd.DataFrame:
+    planilha = conectar_planilha()
+    dados = planilha.get_all_records()
+    return pd.DataFrame(dados)
+
+
+@st.cache_data(ttl=60)
+def carregar_dados() -> pd.DataFrame:
+    df = carregar_dados_brutos_da_planilha()
+
     df = df.dropna(how="all")
     df = df.dropna()
 
-    # normaliza espaços em texto
     for coluna in ["Star color", "Spectral Class"]:
         df[coluna] = df[coluna].astype(str).str.strip()
 
-    # traduz os nomes das cores para português (e nomeia os casos vazios)
     df["Star color"] = df["Star color"].map(NOMES_CORES_PT).fillna(df["Star color"])
 
-    # conversão para numérico (algumas colunas vêm como string, com espaços)
-    colunas_numericas = [
-        "Temperature (K)",
-        "Luminosity(L/Lo)",
-        "Radius(R/Ro)",
-        "Absolute magnitude(Mv)",
-        "Star type",
-    ]
-    for coluna in colunas_numericas:
+    for coluna in COLUNAS_NUMERICAS:
         df[coluna] = pd.to_numeric(df[coluna], errors="coerce")
 
-    df = df.dropna(subset=colunas_numericas)
+    df = df.dropna(subset=COLUNAS_NUMERICAS)
     df["Star type"] = df["Star type"].astype(int)
     df["Nome do tipo"] = df["Star type"].map(NOMES_TIPO_ESTRELA)
 
     return df
 
 
-df_bruto = carregar_dados("cleaned_star_data.csv")
+df_bruto = carregar_dados()
 
 # ----------------------------------------------------------------------------
 # Cabeçalho
@@ -137,10 +158,12 @@ if df.empty:
 # ----------------------------------------------------------------------------
 st.header("1. Estrutura do dataset")
 
+df_original = carregar_dados_brutos_da_planilha()
+
 c1, c2, c3, c4 = st.columns(4)
 c1.metric("Linhas", df_bruto.shape[0])
 c2.metric("Colunas", df_bruto.shape[1])
-c3.metric("Valores ausentes (original)", int(pd.read_csv("cleaned_star_data.csv").isnull().sum().sum()))
+c3.metric("Valores ausentes (original)", int(df_original.isnull().sum().sum()))
 c4.metric("Estrelas após limpeza", df_bruto.shape[0])
 
 with st.expander("Visualizar amostra dos dados"):
@@ -228,6 +251,49 @@ st.info(
     "na caixa, e há estrelas com temperaturas bem acima da maioria, reforçando "
     "a grande variabilidade térmica entre os diferentes tipos estelares."
 )
+
+# ----------------------------------------------------------------------------
+# 5. Cadastro de nova estrela
+# ----------------------------------------------------------------------------
+st.header("5. Adicionar nova estrela ao dataset")
+
+with st.form("form_nova_estrela"):
+    col_a, col_b = st.columns(2)
+
+    with col_a:
+        nova_temperatura = st.number_input("Temperatura (K)", min_value=0.0, step=100.0)
+        nova_luminosidade = st.number_input("Luminosidade (L/Lo)", min_value=0.0, format="%.5f")
+        novo_raio = st.number_input("Raio (R/Ro)", min_value=0.0, format="%.4f")
+
+    with col_b:
+        nova_magnitude = st.number_input("Magnitude absoluta (Mv)", format="%.2f")
+        novo_tipo = st.selectbox(
+            "Tipo de estrela",
+            options=list(NOMES_TIPO_ESTRELA.keys()),
+            format_func=lambda t: f"{t} - {NOMES_TIPO_ESTRELA[t]}",
+        )
+        nova_cor = st.selectbox("Cor da estrela", options=list(MAPA_CORES.keys()))
+        nova_classe = st.text_input("Classe espectral (ex: O, B, A, F, G, K, M)", max_chars=1)
+
+    enviado = st.form_submit_button("Adicionar estrela")
+
+    if enviado:
+        cor_original = CORES_PT_PARA_INGLES.get(nova_cor, nova_cor)
+
+        planilha = conectar_planilha()
+        planilha.append_row([
+            nova_temperatura,
+            nova_luminosidade,
+            novo_raio,
+            nova_magnitude,
+            novo_tipo,
+            cor_original,
+            nova_classe.upper(),
+        ])
+
+        st.success("Estrela adicionada com sucesso!")
+        st.cache_data.clear()
+        st.rerun()
 
 # ----------------------------------------------------------------------------
 # Conclusão
